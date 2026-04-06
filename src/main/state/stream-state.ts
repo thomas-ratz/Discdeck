@@ -1,3 +1,8 @@
+// Pure stream state machine: idle / connecting / live / error with a 3-in-30s
+// crash-loop guard. No I/O, no timers, no Electron. The heart of the app —
+// every module either feeds events in via send() or reads state via getters
+// (or via snapshot() for a frozen point-in-time copy).
+
 export type StreamState = 'idle' | 'connecting' | 'live' | 'error';
 
 export type StreamEvent =
@@ -10,10 +15,10 @@ export type StreamEvent =
   | { type: 'reconnect' };
 
 export interface StreamStateSnapshot {
-  state: StreamState;
-  deckConnected: boolean;
-  currentGame: string | null;
-  errorReason: string | null;
+  readonly state: StreamState;
+  readonly deckConnected: boolean;
+  readonly currentGame: string | null;
+  readonly errorReason: string | null;
 }
 
 export interface StreamStateMachine extends StreamStateSnapshot {
@@ -44,6 +49,8 @@ export function createStreamState(): StreamStateMachine {
   }
 
   function send(event: StreamEvent): StreamStateSnapshot {
+    // Handled BEFORE the error-sticky guard below so that reconnect
+    // remains the only way out of `error`. Do not reorder these branches.
     if (event.type === 'reconnect') {
       state = 'idle';
       errorReason = null;
@@ -52,7 +59,7 @@ export function createStreamState(): StreamStateMachine {
     }
 
     if (state === 'error') {
-      // sticky; only `reconnect` can leave error state
+      // Sticky: only `reconnect` (handled above) can leave error state.
       return snapshot();
     }
 
