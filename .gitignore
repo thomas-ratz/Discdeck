@@ -1,2 +1,11 @@
 .worktrees/
 .claude/
+node_modules/
+out/
+dist/
+*.log
+.vite/
+.electron-vite/
+.DS_Store
+.env
+.env.*
