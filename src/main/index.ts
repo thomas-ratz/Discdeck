@@ -87,6 +87,9 @@ app.whenReady().then(async () => {
       applyEvent(() => state.send({ type: 'ffmpeg_crashed', at: Date.now() }));
     }
     if (state.snapshot().state !== 'error') {
+      // Reset the relay's session buffer so the next ffmpeg session
+      // starts with a fresh init segment for any client that connects.
+      videoRelay?.resetSession();
       // Respawn the listener so it's ready for the next push.
       ffmpeg!.start();
     }
@@ -147,6 +150,7 @@ app.whenReady().then(async () => {
     onReconnect: () => {
       logger.info('reconnect requested');
       applyEvent(() => state.send({ type: 'reconnect' }));
+      videoRelay?.resetSession();
       ffmpeg?.stop().then(() => ffmpeg?.start());
     },
     getWindow: () => discdeckWindow?.window ?? null,
@@ -157,6 +161,7 @@ app.whenReady().then(async () => {
     onReconnect: () => {
       logger.info('reconnect requested via tray');
       applyEvent(() => state.send({ type: 'reconnect' }));
+      videoRelay?.resetSession();
       ffmpeg?.stop().then(() => ffmpeg?.start());
     },
     onToggleAlwaysOnTop: (on) => {
