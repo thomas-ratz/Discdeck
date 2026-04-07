@@ -33,6 +33,7 @@ Run after every meaningful change to Discdeck Part 1. The Discord smoke test can
 - [ ] Splash is replaced by live video showing a test pattern (color bars + counter).
 - [ ] Title flips to `🎮 Steam Deck — Hades` mid-stream while video keeps playing.
 - [ ] Stream ends, splash returns, tray icon goes back to grey.
+- [ ] Run `npm run dummy:full` a SECOND time without restarting the app — video still plays. (Regression check for the relay buffer fix: the per-session buffer must be cleared between ffmpeg respawns or the second run inherits the first run's stale init segment and Chromium MSE rejects the new fragments.)
 
 ## Discord smoke test (the whole point)
 
