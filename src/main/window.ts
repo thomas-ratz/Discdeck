@@ -59,7 +59,14 @@ export function createDiscdeckWindow(opts: CreateWindowOptions = {}): DiscdeckWi
       preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      // sandbox: true would silently break the preload because Electron's
+      // sandbox mode does not support ES-module (.mjs) preload scripts, and
+      // electron-vite outputs the preload as .mjs (project is "type":"module").
+      // contextIsolation + nodeIntegration:false is sufficient for our threat
+      // model — the renderer only loads first-party content, never untrusted
+      // remote pages. Revisit if/when Electron gains sandboxed ESM preload
+      // support, or switch the preload build target to CommonJS.
+      sandbox: false,
     },
   });
 
