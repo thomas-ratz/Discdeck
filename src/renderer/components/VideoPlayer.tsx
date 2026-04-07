@@ -1,6 +1,12 @@
 import React, { useEffect, useRef } from 'react';
 
-const MIME = 'video/mp4; codecs="avc1.42E01E"';
+// MIME must be a valid AVC codec descriptor that Chromium MSE accepts;
+// the listener (re-)encodes with -profile:v baseline -level 3.0 which
+// produces avcC bytes 0x42/0xC0/0x1E. Chromium accepts both 42E01E and
+// 42C01E for constrained baseline @ level 3.0; we use 42C01E because
+// it matches the actual avcC bytes byte-for-byte (verified via
+// out/inspect-mp4.mjs during the streaming bug investigation).
+const MIME = 'video/mp4; codecs="avc1.42C01E"';
 
 export default function VideoPlayer(): React.ReactElement {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -35,9 +41,8 @@ export default function VideoPlayer(): React.ReactElement {
         }
 
         // Capture the MediaSource in a local const so the sourceopen listener
-        // can verify it's still the current one (guards against StrictMode
-        // double-invoke where a later effect creates a new MS and detaches
-        // this one, transitioning its readyState from 'open' to 'closed').
+        // can verify it is still the current one (defensive against React
+        // double-mount, though StrictMode is currently disabled).
         const ms = new MediaSource();
         mediaSource = ms;
 
@@ -71,9 +76,6 @@ export default function VideoPlayer(): React.ReactElement {
         ws.onerror = (err) => {
           console.warn('VideoPlayer ws error', err);
         };
-        ws.onclose = () => {
-          console.info('VideoPlayer ws closed');
-        };
       } catch (e) {
         console.error('VideoPlayer init failed', e);
       }
@@ -92,11 +94,10 @@ export default function VideoPlayer(): React.ReactElement {
         ws = null;
       }
       // Drop the SourceBuffer reference first so any in-flight pump() call
-      // bails out of the readyState check cleanly.
+      // bails out of the cancelled check cleanly.
       sourceBuffer = null;
-      // Detach the MediaSource from the video element and revoke the object
-      // URL. This transitions the MS readyState to 'closed' cleanly instead
-      // of leaving it attached while a new effect invocation creates another.
+      // Detach the MediaSource from the <video> element and revoke the
+      // object URL so the MS transitions to 'closed' cleanly.
       const video = videoRef.current;
       if (video) {
         try {
