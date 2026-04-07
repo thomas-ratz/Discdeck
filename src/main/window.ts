@@ -43,7 +43,9 @@ export interface CreateWindowOptions {
 }
 
 export function createDiscdeckWindow(opts: CreateWindowOptions = {}): DiscdeckWindow {
-  const preloadPath = opts.preloadPath ?? join(__dirname, '../preload/index.js');
+  // electron-vite outputs the preload as an ES module (.mjs) because the
+  // project has "type": "module" and the preload is a separate build target.
+  const preloadPath = opts.preloadPath ?? join(__dirname, '../preload/index.mjs');
   const window = new BrowserWindow({
     width: 1280,
     height: 800,
