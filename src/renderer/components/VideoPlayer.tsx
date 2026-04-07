@@ -10,10 +10,11 @@ export default function VideoPlayer(): React.ReactElement {
     let ws: WebSocket | null = null;
     let mediaSource: MediaSource | null = null;
     let sourceBuffer: SourceBuffer | null = null;
+    let objectUrl: string | null = null;
     const queue: ArrayBuffer[] = [];
 
     function pump() {
-      if (!sourceBuffer || sourceBuffer.updating) return;
+      if (cancelled || !sourceBuffer || sourceBuffer.updating) return;
       const next = queue.shift();
       if (!next) return;
       try {
@@ -33,22 +34,35 @@ export default function VideoPlayer(): React.ReactElement {
           return;
         }
 
-        mediaSource = new MediaSource();
+        // Capture the MediaSource in a local const so the sourceopen listener
+        // can verify it's still the current one (guards against StrictMode
+        // double-invoke where a later effect creates a new MS and detaches
+        // this one, transitioning its readyState from 'open' to 'closed').
+        const ms = new MediaSource();
+        mediaSource = ms;
+
         const video = videoRef.current;
         if (!video) return;
-        video.src = URL.createObjectURL(mediaSource);
 
-        mediaSource.addEventListener('sourceopen', () => {
-          if (!mediaSource) return;
-          sourceBuffer = mediaSource.addSourceBuffer(MIME);
-          sourceBuffer.mode = 'sequence';
-          sourceBuffer.addEventListener('updateend', pump);
-          pump();
+        objectUrl = URL.createObjectURL(ms);
+        video.src = objectUrl;
+
+        ms.addEventListener('sourceopen', () => {
+          if (cancelled || mediaSource !== ms || ms.readyState !== 'open') return;
+          try {
+            sourceBuffer = ms.addSourceBuffer(MIME);
+            sourceBuffer.mode = 'sequence';
+            sourceBuffer.addEventListener('updateend', pump);
+            pump();
+          } catch (e) {
+            console.error('VideoPlayer addSourceBuffer failed', e);
+          }
         });
 
         ws = new WebSocket(`ws://127.0.0.1:${port}`);
         ws.binaryType = 'arraybuffer';
         ws.onmessage = (event) => {
+          if (cancelled) return;
           if (event.data instanceof ArrayBuffer) {
             queue.push(event.data);
             pump();
@@ -75,15 +89,27 @@ export default function VideoPlayer(): React.ReactElement {
         } catch {
           /* ignore */
         }
+        ws = null;
       }
-      if (sourceBuffer && mediaSource && mediaSource.readyState === 'open') {
+      // Drop the SourceBuffer reference first so any in-flight pump() call
+      // bails out of the readyState check cleanly.
+      sourceBuffer = null;
+      // Detach the MediaSource from the video element and revoke the object
+      // URL. This transitions the MS readyState to 'closed' cleanly instead
+      // of leaving it attached while a new effect invocation creates another.
+      const video = videoRef.current;
+      if (video) {
         try {
-          mediaSource.endOfStream();
+          video.removeAttribute('src');
+          video.load();
         } catch {
           /* ignore */
         }
       }
-      sourceBuffer = null;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
       mediaSource = null;
     };
   }, []);
