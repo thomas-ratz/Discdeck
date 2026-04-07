@@ -1,7 +1,11 @@
-// Window module: pure title formatter (Task 3) + BrowserWindow factory (Task 10).
-// This file holds only the formatter for now; createDiscdeckWindow lands in Task 10.
+// Window module: pure title formatter + BrowserWindow factory.
+// formatTitle is pure (tested in test/unit/window-title.test.ts); createDiscdeckWindow
+// owns the actual BrowserWindow with close-to-tray, aspect lock, and title updates.
 
 import type { StreamStateSnapshot } from './state/stream-state.js';
+import { BrowserWindow, app } from 'electron';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
 export function formatTitle(s: StreamStateSnapshot): string {
   const PREFIX = '🎮 Steam Deck';
@@ -21,4 +25,79 @@ export function formatTitle(s: StreamStateSnapshot): string {
     default:
       return base;
   }
+}
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+export interface DiscdeckWindow {
+  window: BrowserWindow;
+  setTitleFromState(snapshot: StreamStateSnapshot): void;
+  show(): void;
+  hide(): void;
+  destroy(): void;
+}
+
+export interface CreateWindowOptions {
+  preloadPath?: string;
+  rendererUrl?: string;
+}
+
+export function createDiscdeckWindow(opts: CreateWindowOptions = {}): DiscdeckWindow {
+  const preloadPath = opts.preloadPath ?? join(__dirname, '../preload/index.js');
+  const window = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    minWidth: 640,
+    minHeight: 400,
+    show: false,
+    title: '🎮 Steam Deck (waiting)',
+    backgroundColor: '#0b0f14',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: preloadPath,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  // Lock 16:10 aspect ratio (Steam Deck native).
+  window.setAspectRatio(16 / 10);
+
+  // Close-to-tray: intercept the close event unless the app is actually quitting.
+  let allowClose = false;
+  window.on('close', (e) => {
+    if (!allowClose) {
+      e.preventDefault();
+      window.hide();
+    }
+  });
+
+  app.on('before-quit', () => {
+    allowClose = true;
+  });
+
+  if (opts.rendererUrl) {
+    window.loadURL(opts.rendererUrl);
+  } else {
+    window.loadFile(join(__dirname, '../renderer/index.html'));
+  }
+
+  return {
+    window,
+    setTitleFromState(snapshot) {
+      window.setTitle(formatTitle(snapshot));
+    },
+    show() {
+      window.show();
+      window.focus();
+    },
+    hide() {
+      window.hide();
+    },
+    destroy() {
+      allowClose = true;
+      if (!window.isDestroyed()) window.destroy();
+    },
+  };
 }
