@@ -44,9 +44,30 @@ export function createFfmpegListener(options: FfmpegListenerOptions): Promise<Ff
     }
     const args = [
       '-rtsp_flags', 'listen',
+      '-fflags', '+genpts',
+      '-use_wallclock_as_timestamps', '1',
       '-i', url,
-      '-c:v', 'copy',
+      // Re-encode to baseline profile level 3.0 so the avcC box in
+      // the init segment matches the MIME we declare to MSE
+      // (avc1.42E01E). With -c:v copy, the listener can't reliably
+      // extract SPS/PPS from the RTSP demuxer in time to write a
+      // valid moov, so Chromium's MSE parser rejects the init
+      // segment with CHUNK_DEMUXER_ERROR_APPEND_FAILED. Re-encoding
+      // is wasteful in production but the cost is small (1280x800
+      // @ 30fps with ultrafast preset is a few % CPU) and the
+      // resulting fMP4 stream is guaranteed clean. Worth revisiting
+      // -c:v copy once the standalone bug is understood.
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',
+      '-tune', 'zerolatency',
+      '-profile:v', 'baseline',
+      '-level', '3.0',
+      '-pix_fmt', 'yuv420p',
+      '-g', '30',
       '-an',
+      '-avoid_negative_ts', 'make_zero',
+      '-video_track_timescale', '90000',
+      '-frag_duration', '500000',
       '-movflags', '+frag_keyframe+empty_moov+default_base_moof',
       '-f', 'mp4',
       'pipe:1',
