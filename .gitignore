@@ -1,2 +1,22 @@
 .worktrees/
 .claude/
+node_modules/
+out/
+dist/
+*.tsbuildinfo
+*.log
+.vite/
+.electron-vite/
+.DS_Store
+.env
+.env.*
+
+# tsc emit artifacts (src/ uses electron-vite, not tsc --outDir; bare tsc runs leave these behind)
+src/**/*.js
+src/**/*.d.ts
+test/**/*.js
+test/**/*.d.ts
+electron.vite.config.js
+electron.vite.config.d.ts
+vitest.config.js
+vitest.config.d.ts

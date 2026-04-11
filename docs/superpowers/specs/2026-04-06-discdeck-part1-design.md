@@ -539,3 +539,58 @@ Part 1 is complete and ready to merge to `main` when:
 5. `docs/PROTOCOL.md` exists as a standalone, readable reference for the Part 2 author.
 6. README documents installation, the dummy producer commands, and the manual test procedure.
 7. The four boundaries in §6.1 are honored: a grep of `src/renderer/` finds zero `electron`/`node:` imports, and a grep of `src/main/` outside `network/` finds zero `ws`/`rtsp`/`mdns` references.
+
+---
+
+## 11. Implementation post-mortem (added during integration)
+
+Part 1 was merged after the manual checklist + Discord smoke test passed. A handful of design decisions in §1–§10 turned out to be wrong or incomplete in subtle ways during the bring-up. Capturing them here so Part 2's author and any future Part 1.5 work doesn't re-walk the same bugs.
+
+### 11.1 The init-segment timing race (the load-bearing bug)
+
+§3.3 describes the data flow as "ffmpeg listener stdout chunks → main forwards to localhost video-relay WebSocket → renderer plays via MSE." What it does NOT call out is that **the renderer's WebSocket connects to the relay AFTER ffmpeg has already started writing stdout**. The state machine flips to `live` only on the FIRST chunk arrival, and only THEN does the renderer mount `VideoPlayer` and open its WebSocket — by which point the fMP4 init segment (ftyp + moov, ~800 bytes) and possibly the first moof+mdat have already been broadcast to zero clients and lost. Without an init segment, Chromium MSE rejects every subsequent moof+mdat with `CHUNK_DEMUXER_ERROR_APPEND_FAILED` and the renderer shows a black window despite a perfectly valid stream flowing.
+
+**Fix landed:** `video-relay.ts` accumulates a per-session buffer (capped at 4 MB) of every chunk pushed since the last `resetSession()` call, and replays it to any new client at connection time. `main/index.ts` calls `resetSession()` whenever ffmpeg respawns. See `fix(network): buffer init segment in video relay for late-joining clients`.
+
+**Implication for Part 2:** the Decky producer doesn't need to know about this — the relay handles it transparently — but anyone building a similar PC-side companion for a different protocol must remember that **MSE consumers MUST be guaranteed to see the init segment**, and naive "broadcast as it arrives" relays will lose data to clients that join after the first chunk.
+
+### 11.2 `-c:v copy` vs re-encode in the listener
+
+§2.1 specifies `-c:v copy` as the listener's transcode mode (no re-encode, preserve Deck encoder choice). In practice this produced fMP4 with `Timestamps are unset` / `Non-monotonic DTS` warnings from the mp4 muxer because the RTSP demuxer doesn't always deliver packets with explicit timestamps. The resulting file would *probably* play once the relay-buffer fix landed (the diagnostic `out/listener-capture.mp4` did parse correctly in Edge), but Part 1 ships with a re-encode (`-c:v libx264 -profile:v baseline -level 3.0 -preset ultrafast -tune zerolatency`) for safety. CPU cost on 1280x800@30fps test pattern: a few percent.
+
+**Implication for Part 2:** when the Decky-side producer becomes the only thing pushing to the listener, we control both ends and can guarantee well-formed input. At that point Part 1.5 should revisit `-c:v copy` to drop the wasted re-encode CPU. The plan's "out of scope" §8.1 should be updated to add this as an explicit Part 1.5 item.
+
+### 11.3 Electron preload + ESM + sandbox
+
+§5.2 calls for `contextIsolation: true`, `nodeIntegration: false`, and §6.1 boundary 3 implies `sandbox: true` is the secure default. Reality: **Electron's `sandbox: true` mode does not support ES-module preload scripts**, and electron-vite outputs the preload as `.mjs` because the project has `"type": "module"`. With `sandbox: true`, the preload silently fails to load — no error, just a dead `window.discdeck` reference in the renderer. Part 1 ships with `sandbox: false`. `contextIsolation: true` + `nodeIntegration: false` is sufficient for our threat model (renderer only ever loads first-party content), but the spec's implicit "sandbox: true is the default" assumption was wrong.
+
+**Implication for Part 2:** none directly (Part 2 doesn't touch the preload), but if Part 1.5 ever revisits packaging or upgrades Electron, watch for changes to ESM preload support. The cleanest long-term fix is to switch the preload build target to CommonJS (`.cjs` or `.js` without `"type": "module"` scope), at which point `sandbox: true` becomes available again.
+
+### 11.4 The MIME-must-match-avcC false trail
+
+During the streaming bug investigation we spent significant effort chasing a hypothesis that `video/mp4; codecs="avc1.42E01E"` (the MIME the renderer was declaring) didn't match the avcC bytes the listener produces (`0x42 0xC0 0x1E`). It turns out **Chromium MSE accepts both `42E01E` and `42C01E` (and other variants) as constrained baseline @ level 3.0** — the difference is just `constraint_set2_flag`. The MIME mismatch was a complete dead end. The codebase still uses `avc1.42C01E` because it matches the actual avcC bytes byte-for-byte, but `42E01E` would also work.
+
+**Implication for Part 2:** when picking a MIME, match the actual stream's avcC if you can read it; if not, use any of the compatible variants. Don't trust online "avc1 codec string calculator" pages over `MediaSource.isTypeSupported(...)`.
+
+### 11.5 React StrictMode + MediaSource lifecycle
+
+§9 left the React choice open. Part 1 ships with React 18 but **StrictMode is disabled in `src/renderer/index.tsx`** because its dev-mode effect double-invoke tangles badly with the `MediaSource` lifecycle: re-attaching a `MediaSource` to the same `<video>` element silently detaches the first one, leaving the original `SourceBuffer` orphaned and producing a confusing cascade of `appendBuffer` errors. `VideoPlayer.tsx` retains defensive lifecycle code (capture-in-local-const, `mediaSource !== ms` checks, `cancelled` flag in `pump`) so re-enabling StrictMode later should be safe, but for Part 1 we just turn it off.
+
+**Implication for Part 2:** none — Decky's renderer is React but doesn't use MediaSource. If Part 1.5 ever revisits this, the cleanest fix is probably to wrap MediaSource creation in a `useRef` so it's stable across re-mounts.
+
+### 11.6 Stale TypeScript emit artifacts in `src/`
+
+Task 9's tsconfig had `composite: true` which caused `tsc --build` runs to emit `.js` and `.d.ts` files next to every `.ts` source. These are gitignored but they shadow the real `.ts` files when Vite resolves imports, leading to "I changed the source but the bundle still has the old version" symptoms. Part 1's `tsconfig` no longer uses `composite`, but if anyone reintroduces it, **add a clean step that deletes `find src test -type f \( -name "*.js" -o -name "*.d.ts" \)`** before each build. (The current spec doesn't mention this gotcha because it was discovered during bring-up.)
+
+---
+
+## 12. Part 1.5 polish backlog (added post-merge)
+
+In addition to the §8.1 items, the streaming bring-up surfaced these follow-ups:
+
+- **Revisit `-c:v copy`** in the ffmpeg listener once Part 2's producer is the only input (see §11.2)
+- **Bounded session buffer**: the relay's 4 MB cap is a placeholder; smarter would be "init segment + last keyframe fragment" so late-joining clients get a clean start without unbounded memory (see §11.1)
+- **Re-enable React StrictMode** by stabilizing `MediaSource` across re-mounts (see §11.5)
+- **CommonJS preload + sandbox: true** for tighter renderer isolation (see §11.3)
+- **Dynamic MIME from avcC**: parse the init segment and construct the codec string at runtime, so encoder changes don't need a renderer code change (see §11.4)
+- **Manual test for second-run regression**: the relay-buffer fix is now in `MANUAL_TEST.md` §"Full pipeline" — a vitest integration test would be more durable
