@@ -50,9 +50,9 @@ import pytest
 @pytest.fixture(autouse=True)
 def _decky_stub(tmp_path, monkeypatch):
     """Auto-fixture so every test gets a clean Decky stub."""
-    # Remove cached decky + backend modules so each test is isolated.
+    # Remove cached decky + backend modules + main so each test is isolated.
     for mod in list(sys.modules):
-        if mod == 'decky' or mod.startswith('backend.'):
+        if mod == 'decky' or mod == 'main' or mod.startswith('backend.'):
             sys.modules.pop(mod, None)
     _install_decky_stub(tmp_path)
     yield
