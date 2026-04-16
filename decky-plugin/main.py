@@ -47,6 +47,9 @@ class Plugin:
         self._connect_task: asyncio.Task | None = None
         self._client_task: asyncio.Task | None = None
         self._shutdown = asyncio.Event()
+        self._last_target: dict | None = None
+        self._backoff_task: asyncio.Task | None = None
+        self._backoff_delay: float = 1.0
 
         # Bootstrap capability on bundled ffmpeg (idempotent).
         try:
@@ -69,6 +72,8 @@ class Plugin:
 
     async def _unload(self) -> None:
         self._shutdown.set()
+        if self._backoff_task is not None:
+            self._backoff_task.cancel()
         if self.ffmpeg is not None:
             await self.ffmpeg.stop()
         if self.event_client is not None:
@@ -114,6 +119,8 @@ class Plugin:
     async def _connect_to(self, addr: str, event_port: int, rtsp_port: int, *, server: str) -> None:
         self.sm.on_dial_started()
         await self._emit_state()
+        self._last_target = {'addr': addr, 'event_port': event_port,
+                             'rtsp_port': rtsp_port, 'server': server}
         self.current_pc = {'server': server, 'address': addr,
                            'event_port': event_port, 'rtsp_port': rtsp_port}
         hello = {
@@ -131,6 +138,7 @@ class Plugin:
         self._client_task = asyncio.create_task(self.event_client.run())
 
     async def _on_welcome(self, server_info: dict[str, Any]) -> None:
+        self._backoff_delay = 1.0
         self.sm.on_welcome(server_info)
         await self._emit_state()
 
@@ -142,6 +150,24 @@ class Plugin:
         self.sm.on_ws_dropped()
         self.current_pc = None
         await self._emit_state()
+        if self._last_target is not None:
+            self._schedule_backoff_retry()
+
+    def _schedule_backoff_retry(self) -> None:
+        if self._backoff_task is not None and not self._backoff_task.done():
+            self._backoff_task.cancel()
+
+        async def _retry() -> None:
+            try:
+                await asyncio.sleep(self._backoff_delay)
+            except asyncio.CancelledError:
+                return
+            self._backoff_delay = min(self._backoff_delay * 2, 30.0)
+            t = self._last_target
+            if t:
+                await self._connect_to(t['addr'], t['event_port'], t['rtsp_port'], server=t['server'])
+
+        self._backoff_task = asyncio.create_task(_retry())
 
     # ---- Frontend call() methods ----
     async def get_state(self) -> dict[str, Any]:
@@ -182,6 +208,12 @@ class Plugin:
         mode = args['mode']
         addr = args.get('address')
         self.settings.update(pc_address_mode=mode, manual_pc_address=addr)
+        # Cancel any pending backoff retry — this is a user-initiated action.
+        if self._backoff_task is not None:
+            self._backoff_task.cancel()
+            self._backoff_task = None
+        self._last_target = None
+        self._backoff_delay = 1.0
         # Tear down current connection and restart.
         if self.event_client is not None:
             await self.event_client.stop()
