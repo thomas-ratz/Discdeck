@@ -1,0 +1,11 @@
+{
+  "name": "Discdeck",
+  "author": "Jaste",
+  "flags": ["root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["streaming", "discord", "utility"],
+    "description": "Stream your Steam Deck gameplay to vanilla Discord on your PC over LAN via a companion app.",
+    "image": ""
+  }
+}

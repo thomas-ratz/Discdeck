@@ -1,0 +1,17 @@
+[project]
+name = "discdeck-backend"
+version = "0.1.0"
+description = "Discdeck Decky plugin backend."
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "websockets>=13.1",
+  "zeroconf>=0.132",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
